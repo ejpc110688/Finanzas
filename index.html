@@ -174,12 +174,13 @@ function Modal({ onClose, title, children }) {
   );
 }
 
+
 // ── App ──────────────────────────────────────────────────────────────────────
 function App() {
   const [tab, setTab] = useState("dashboard");
   const [viewMonth, setViewMonth] = useState({ y: curY, m: curM }); // historical view
 
-  // Persisted state
+  // Persisted state (localStorage as fallback / cache)
   const [expenses,    setExpenses]    = usePersistedState("fin_expenses_v2",    DEF_EXP);
   const [incomes,     setIncomes]     = usePersistedState("fin_incomes_v2",     DEF_INC);
   const [budgets,     setBudgets]     = usePersistedState("fin_budgets_v2",     DEF_BUD);
@@ -188,6 +189,29 @@ function App() {
   const [savings,     setSavings]     = usePersistedState("fin_savings_v2",     DEF_SAVINGS);
   const [customExpCats, setCustomExpCats] = usePersistedState("fin_custom_exp_cats", []);
   const [customIncCats, setCustomIncCats] = usePersistedState("fin_custom_inc_cats", []);
+
+  // ── Backup reminder ──
+  const [lastBackup, setLastBackup] = usePersistedState("fin_last_backup", null);
+  const [showBackupReminder, setShowBackupReminder] = useState(false);
+
+  // Check on mount if a backup reminder should show
+  useEffect(() => {
+    const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    if (!lastBackup || (now - lastBackup) > WEEK_MS) {
+      // Wait 2s so the user sees the app first
+      const timer = setTimeout(() => setShowBackupReminder(true), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, []);
+
+  const dismissReminder = (didBackup) => {
+    if (didBackup) setLastBackup(Date.now());
+    setShowBackupReminder(false);
+  };
+
+  // Days since last backup (for display in Más tab)
+  const daysSinceBackup = lastBackup ? Math.floor((Date.now() - lastBackup) / (24*60*60*1000)) : null;
 
   // Merge base + custom categories
   const CATEGORIES  = useMemo(() => [...BASE_EXPENSE_CATS, ...customExpCats], [customExpCats]);
@@ -338,7 +362,7 @@ function App() {
 
   // ── Backup ──
   const exportBackup = () => {
-    const data = { expenses, incomes, budgets, debts, investments, savings, exportedAt: new Date().toISOString() };
+    const data = { expenses, incomes, budgets, debts, investments, savings, customExpCats, customIncCats, exportedAt: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -346,6 +370,7 @@ function App() {
     a.download = `finanzas-backup-${todayStr}.json`;
     a.click();
     URL.revokeObjectURL(url);
+    setLastBackup(Date.now());
   };
   const importBackup = (e) => {
     const file = e.target.files?.[0];
@@ -355,12 +380,14 @@ function App() {
       try {
         const d = JSON.parse(reader.result);
         if (!confirm("Esto reemplazará TODOS tus datos actuales. ¿Continuar?")) return;
-        if (d.expenses)    setExpenses(d.expenses);
-        if (d.incomes)     setIncomes(d.incomes);
-        if (d.budgets)     setBudgets(d.budgets);
-        if (d.debts)       setDebts(d.debts);
-        if (d.investments) setInvestments(d.investments);
-        if (d.savings)     setSavings(d.savings);
+        if (d.expenses)      setExpenses(d.expenses);
+        if (d.incomes)       setIncomes(d.incomes);
+        if (d.budgets)       setBudgets(d.budgets);
+        if (d.debts)         setDebts(d.debts);
+        if (d.investments)   setInvestments(d.investments);
+        if (d.savings)       setSavings(d.savings);
+        if (d.customExpCats) setCustomExpCats(d.customExpCats);
+        if (d.customIncCats) setCustomIncCats(d.customIncCats);
         alert("Datos restaurados correctamente");
       } catch { alert("Error al leer el archivo"); }
     };
@@ -796,7 +823,26 @@ function App() {
             <button className="btnInc" style={{ padding:"11px" }} onClick={()=>{setFCat({label:"",type:"expense"});setModal("cat");}}>+ Cat. de gasto</button>
             <button className="btn" style={{ padding:"11px" }} onClick={()=>{setFCat({label:"",type:"income"});setModal("cat");}}>+ Cat. de ingreso</button>
           </div>
-          <p style={{ fontSize:13, fontWeight:600, color:"#94a3b8", marginBottom:8, paddingLeft:4 }}>Datos y respaldo</p>
+          <p style={{ fontSize:13, fontWeight:600, color:"#94a3b8", marginBottom:8, paddingLeft:4 }}>Estado del backup</p>
+          <div style={{...card, padding:16, marginBottom:14,
+            borderColor: daysSinceBackup === null ? "#EF444444" : daysSinceBackup > 7 ? "#F59E0B44" : "#10B98144" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:8 }}>
+              <div style={{ width:10, height:10, borderRadius:"50%",
+                background: daysSinceBackup === null ? "#EF4444" : daysSinceBackup > 7 ? "#F59E0B" : "#10B981" }}/>
+              <p style={{ fontSize:14, fontWeight:500 }}>
+                {daysSinceBackup === null ? "Nunca hiciste un backup" :
+                 daysSinceBackup === 0 ? "Último backup: hoy" :
+                 daysSinceBackup === 1 ? "Último backup: ayer" :
+                 `Último backup: hace ${daysSinceBackup} días`}
+              </p>
+            </div>
+            <p style={{ fontSize:12, color:"#475569", marginBottom:12 }}>
+              Tus datos se guardan en tu iPhone. Te recomendamos descargar un backup una vez por semana por si reinstalás la app o cambiás de teléfono.
+            </p>
+            <button className="btn" style={{ padding:"12px", fontSize:14 }} onClick={()=>{exportBackup();setLastBackup(Date.now());}}>Descargar backup ahora</button>
+          </div>
+
+          <p style={{ fontSize:13, fontWeight:600, color:"#94a3b8", marginBottom:8, paddingLeft:4 }}>Restaurar y reset</p>
           <div style={{...card, padding:16, marginBottom:10}}>
             <p style={{ fontSize:13, marginBottom:10 }}>Exportar todos tus datos como archivo de respaldo (JSON).</p>
             <button className="btnG" style={{ marginTop:0 }} onClick={exportBackup}>Descargar backup</button>
@@ -940,6 +986,30 @@ function App() {
           <button className="btnG" onClick={closeModal}>Cancelar</button>
         </div>
       </Modal>}
+
+      {/* ── Backup reminder ── */}
+      {showBackupReminder && (
+        <div className="ovl" onClick={e => e.target === e.currentTarget && dismissReminder(false)}>
+          <div className="modal">
+            <div style={{ textAlign:"center", marginBottom:20 }}>
+              <div style={{ width:56, height:56, borderRadius:16, background:"linear-gradient(135deg,#6366f1,#8b5cf6)", display:"inline-flex", alignItems:"center", justifyContent:"center", marginBottom:14 }}>
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="white"><path d="M12 2L4 7v6c0 5 3.5 9.5 8 11 4.5-1.5 8-6 8-11V7l-8-5z"/></svg>
+              </div>
+              <h2 style={{ fontSize:22, fontWeight:700, marginBottom:8 }}>¿Hacemos un backup?</h2>
+              <p style={{ fontSize:14, color:"#94a3b8", lineHeight:1.5 }}>
+                {daysSinceBackup === null
+                  ? "Te recomiendo descargar un respaldo de tus datos para que no los pierdas si reinstalás la app."
+                  : `Pasaron ${daysSinceBackup} días desde tu último backup. Es buen momento para guardar otro respaldo.`}
+              </p>
+            </div>
+            <button className="btn" onClick={() => { exportBackup(); dismissReminder(true); }}>Descargar backup ahora</button>
+            <button className="btnG" onClick={() => dismissReminder(false)}>Recordarme mañana</button>
+            <button onClick={() => { setLastBackup(Date.now()); dismissReminder(true); }} style={{ background:"none", border:"none", color:"#475569", fontSize:12, marginTop:10, cursor:"pointer", width:"100%", padding:8, fontFamily:"inherit" }}>
+              Ya lo hice por mi cuenta, no avisar por una semana
+            </button>
+          </div>
+        </div>
+      )}
 
       {modal==="inv" && <Modal title={editing?.type==="inv"?"Editar inversión":"Nueva inversión"} onClose={closeModal}>
         <div style={{ display:"flex",flexDirection:"column",gap:12 }}>
